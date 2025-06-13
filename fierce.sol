@@ -4,37 +4,69 @@ pragma solidity ^0.8.26;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
 /**
- * @title Fierce Token
- * @dev ERC20 token with dynamic staking and burn mechanisms, including reward structures and flexible supply control
+ * @title Fierce Token - Versión Completa con Vesting
+ * @dev ERC20 con staking dinámico, quema de tokens, vesting y mecanismos de recompensa
+ * Implementa los mejores estándares de seguridad de DeFi
  */
-contract Fierce is ERC20, Ownable, ReentrancyGuard {
+contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
     // Staking structure
     struct StakeInfo {
-        uint256 amount; // Staked amount
-        uint256 startTime; // Timestamp when the stake started
-        uint256 duration; // Duration of staking period
-        uint256 rewardRate; // Initial rate of rewards for this stake
+        uint256 amount;
+        uint256 startTime;
+        uint256 duration;
+        uint256 rewardRate;
         bool active;
-        uint256 lastRewardCalculation; // Last reward calculation timestamp to update accumulated rewards efficiently
-        uint256 accumulatedRewards; // Accumulated rewards calculated up to the last update time
+        uint256 lastRewardCalculation;
+        uint256 accumulatedRewards;
+    }
+
+    // Vesting structure
+    struct VestingSchedule {
+        address beneficiary;
+        uint256 totalAmount;
+        uint256 releasedAmount;
+        uint256 startTime;
+        uint256 duration;
+        uint256 cliff; // Período inicial sin desbloqueo
     }
 
     // Constants
-    uint256 public immutable MAX_SUPPLY = 10000000000 * 10**18; // 10 billion tokens (optimized as immutable)
+    uint256 public immutable MAX_SUPPLY = 10000000000 * 10**18;
+    uint256 public constant ACTION_DELAY = 2 days;
+    uint256 public constant MAX_BURN_RATE = 1000; // 10%
+    uint256 public constant MIN_BURN_RATE = 50; // 0.5%
+    uint256 public maxRewardAccumulationPeriod = 30 days;
 
     // State variables
-    uint256 public mintedTokens; // Total tokens minted
-    uint256 public burnedTokens; // Total number of tokens that have been burned so far
-    uint256 public MIN_STAKING_AMOUNT; // Minimum amount required for staking
-    bool public BURNING_ACTIVE; // Flag to enable/disable token burning
-    uint256 public dynamicBurnRate; // Dynamic burn rate (base 10000)
+    uint256 public mintedTokens;
+    uint256 public burnedTokens;
+    uint256 public MIN_STAKING_AMOUNT;
+    bool public BURNING_ACTIVE;
+    uint256 public dynamicBurnRate;
+    uint256 public dailyMintLimit = 1000000 * 10**18;
+    uint256 public lastMintTime;
+    uint256 public mintedInPeriod;
+    uint256 public totalVestedTokens;
+
+    // Security structures
+    struct PendingChange {
+        uint256 newValue;
+        uint256 executeAfter;
+    }
+
+    mapping(string => PendingChange) public pendingChanges;
+    address[] public guardians;
+    mapping(address => bool) public isGuardian;
+    mapping(address => bool) public isBlacklisted;
+    mapping(bytes32 => uint256) public scheduledTimes;
 
     // Mappings
-    mapping(address => mapping(uint256 => bool)) public stakingIdExists;
     mapping(address => StakeInfo[]) public userStakes;
     mapping(uint256 => uint256) public durationRewards;
+    mapping(address => VestingSchedule[]) public vestingSchedules;
 
     // Events
     event TokensMinted(address indexed to, uint256 amount, string reason);
@@ -55,66 +87,164 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard {
     event FundsWithdrawn(uint256 amount);
     event APRUpdated(uint256 duration, uint256 newRate, uint256 oldRate);
     event RewardsCalculated(address user, uint256 stakeIndex, uint256 rewards);
+    event BurnRateChanged(uint256 newRate);
+    event StakingMinimumChanged(uint256 newAmount);
+    event GuardianAdded(address guardian);
+    event GuardianRemoved(address guardian);
+    event AddressBlacklisted(address wallet);
+    event AddressWhitelisted(address wallet);
+    event VestingScheduleCreated(
+        address beneficiary,
+        uint256 totalAmount,
+        uint256 duration
+    );
+    event TokensReleased(address beneficiary, uint256 amount);
+    event DailyMintLimitChanged(uint256 newLimit);
 
-    /**
-     * @dev Contract constructor
-     * @param _initialMinStakingAmount Initial minimum amount required for staking
-     * @param _initialOwner Address of the initial contract owner
-     */
+    // Modifiers
+    modifier onlyGuardian() {
+        require(isGuardian[msg.sender], "Not guardian");
+        _;
+    }
+
+    modifier notBlacklisted(address account) {
+        require(!isBlacklisted[account], "Address blacklisted");
+        _;
+    }
+
+    modifier noContracts() {
+        require(msg.sender == tx.origin, "No contract calls");
+        _;
+    }
+
+    modifier scheduledAction(bytes32 actionId) {
+        require(
+            block.timestamp >= scheduledTimes[actionId],
+            "Action not ready"
+        );
+        _;
+    }
+
     constructor(uint256 _initialMinStakingAmount, address _initialOwner)
         ERC20("Fierce", "Fierce")
         Ownable(_initialOwner)
     {
         MIN_STAKING_AMOUNT = _initialMinStakingAmount;
         dynamicBurnRate = 150; // Initial 1.5%
+        // Add owner as first guardian
+        guardians.push(_initialOwner);
+        isGuardian[_initialOwner] = true;
     }
 
-    function updateAPR(uint256 duration, uint256 newRate) external onlyOwner {
-        require(newRate <= 300, "Rate too high"); // Máximo 30% APR
-
-        // Emitir evento con el cambio
-        emit APRUpdated(duration, newRate, durationRewards[duration]);
-
-        // Actualizar la tasa
-        durationRewards[duration] = newRate;
+    // Security Functions
+    function pause() public onlyOwner {
+        _pause();
     }
 
-    function calculateCurrentRewards(address user, uint256 stakeIndex) public {
-        StakeInfo storage stakeData = userStakes[user][stakeIndex];
-        require(stakeData.active, "Stake not active");
-
-        uint256 timeElapsed = block.timestamp - stakeData.lastRewardCalculation;
-        if (timeElapsed > 0) {
-            uint256 newRewards = (stakeData.amount *
-                stakeData.rewardRate *
-                timeElapsed) / (365 days * 1000);
-
-            stakeData.accumulatedRewards += newRewards;
-            stakeData.lastRewardCalculation = block.timestamp;
-
-            emit RewardsCalculated(user, stakeIndex, newRewards);
-        }
+    function unpause() public onlyOwner {
+        _unpause();
     }
 
-    /**
-     * @dev Implements FIERCE DYNAMIC MINT
-     * Allows minting tokens based on specific activities
-     * @param to Address to receive the minted tokens
-     * @param amount Amount of tokens to mint
-     * @param reason Description of the minting reason
-     */
+    function addGuardian(address guardian) external onlyOwner {
+        require(!isGuardian[guardian], "Already guardian");
+        guardians.push(guardian);
+        isGuardian[guardian] = true;
+        emit GuardianAdded(guardian);
+    }
+
+    function removeGuardian(address guardian) external onlyOwner {
+        require(isGuardian[guardian], "Not guardian");
+        isGuardian[guardian] = false;
+        emit GuardianRemoved(guardian);
+    }
+
+    function blacklistAddress(address wallet) external onlyOwner {
+        isBlacklisted[wallet] = true;
+        emit AddressBlacklisted(wallet);
+    }
+
+    function whitelistAddress(address wallet) external onlyOwner {
+        isBlacklisted[wallet] = false;
+        emit AddressWhitelisted(wallet);
+    }
+
+    function scheduleAction(bytes32 actionId) internal {
+        scheduledTimes[actionId] = block.timestamp + ACTION_DELAY;
+    }
+
+    // Token Functions with Security
     function mintForActivity(
         address to,
         uint256 amount,
         string memory reason
-    ) external onlyOwner {
+    ) external onlyOwner whenNotPaused {
         require(mintedTokens + amount <= MAX_SUPPLY, "Exceeds maximum supply");
+
+        if (block.timestamp > lastMintTime + 1 days) {
+            mintedInPeriod = 0;
+            lastMintTime = block.timestamp;
+        }
+        require(
+            mintedInPeriod + amount <= dailyMintLimit,
+            "Daily limit exceeded"
+        );
+
         _mint(to, amount);
         mintedTokens += amount;
+        mintedInPeriod += amount;
         emit TokensMinted(to, amount, reason);
     }
 
-    function stake(uint256 amount, uint256 duration) external {
+    function updateDynamicBurnRate(uint256 newRate) external onlyOwner {
+        require(
+            newRate <= MAX_BURN_RATE && newRate >= MIN_BURN_RATE,
+            "Rate out of bounds"
+        );
+        dynamicBurnRate = newRate;
+        emit BurnRateChanged(newRate);
+    }
+
+    function toggleBurning() external onlyOwner {
+        BURNING_ACTIVE = !BURNING_ACTIVE;
+    }
+
+    function setDurationReward(uint256 duration, uint256 rewardRate)
+        external
+        onlyOwner
+    {
+        uint256 oldRate = durationRewards[duration];
+        durationRewards[duration] = rewardRate;
+        emit APRUpdated(duration, rewardRate, oldRate);
+    }
+
+    function queueMinStakingChange(uint256 newAmount) external onlyOwner {
+        pendingChanges["MIN_STAKING"] = PendingChange(
+            newAmount,
+            block.timestamp + ACTION_DELAY
+        );
+    }
+
+    function executeMinStakingChange() external onlyOwner {
+        PendingChange memory change = pendingChanges["MIN_STAKING"];
+        require(block.timestamp >= change.executeAfter, "Delay not passed");
+        MIN_STAKING_AMOUNT = change.newValue;
+        emit StakingMinimumChanged(change.newValue);
+        delete pendingChanges["MIN_STAKING"];
+    }
+
+    function setDailyMintLimit(uint256 newLimit) external onlyOwner {
+        require(newLimit > 0, "Limit must be greater than zero");
+        dailyMintLimit = newLimit;
+        emit DailyMintLimitChanged(newLimit);
+    }
+
+    // Staking Functions
+    function stake(uint256 amount, uint256 duration)
+        external
+        whenNotPaused
+        noContracts
+        notBlacklisted(msg.sender)
+    {
         require(durationRewards[duration] > 0, "Invalid duration");
         require(amount >= MIN_STAKING_AMOUNT, "Amount too low");
 
@@ -130,67 +260,43 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard {
 
         userStakes[msg.sender].push(newStake);
         _transfer(msg.sender, address(this), amount);
+        emit TokensStaked(
+            msg.sender,
+            userStakes[msg.sender].length - 1,
+            amount,
+            duration
+        );
     }
 
-    function viewCurrentRewards(address user, uint256 stakeIndex)
-        external
-        view
-        returns (uint256)
-    {
-        // Cambiar el nombre de la variable stake a stakeData
-        StakeInfo memory stakeData = userStakes[user][stakeIndex];
-        if (!stakeData.active) return 0;
+    function calculateCurrentRewards(address user, uint256 stakeIndex) public {
+        StakeInfo storage stakeData = userStakes[user][stakeIndex];
+        require(stakeData.active, "Stake not active");
+        require(
+            block.timestamp <=
+                stakeData.startTime +
+                    stakeData.duration +
+                    maxRewardAccumulationPeriod,
+            "Reward accumulation expired"
+        );
 
         uint256 timeElapsed = block.timestamp - stakeData.lastRewardCalculation;
-        uint256 newRewards = (stakeData.amount *
-            stakeData.rewardRate *
-            timeElapsed) / (365 days * 1000);
-
-        return stakeData.accumulatedRewards + newRewards;
-    }
-
-    /**
-     * @dev Updates the dynamic burn rate
-     * @param newRate New burn rate (base 10000, max 1000 or 10%)
-     */
-    function updateDynamicBurnRate(uint256 newRate) external onlyOwner {
-        require(newRate <= 1000, "Rate too high"); // Max 10%
-        dynamicBurnRate = newRate;
-    }
-
-    /**
-     * @dev Enables or disables token burning
-     * @param isActive New state for burning mechanism
-     */
-    function toggleBurning(bool isActive) external onlyOwner {
-        BURNING_ACTIVE = isActive;
-    }
-
-    /**
-     * @dev Override of the transfer function to implement dynamic burning
-     * @param sender Address sending tokens
-     * @param recipient Address receiving tokens
-     * @param amount Amount of tokens to transfer
-     */
-    function _transfer(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) internal virtual override nonReentrant {
-        require(amount > 0, "Transfer amount must be greater than zero");
-
-        if (BURNING_ACTIVE && sender != owner() && recipient != address(this)) {
-            uint256 burnAmount = (amount * dynamicBurnRate) / 10000;
-            super._burn(sender, burnAmount);
-            burnedTokens += burnAmount;
-            super._transfer(sender, recipient, amount - burnAmount);
-            emit TokensBurned(sender, burnAmount);
-        } else {
-            super._transfer(sender, recipient, amount);
+        if (timeElapsed > 0) {
+            uint256 newRewards = (stakeData.amount *
+                stakeData.rewardRate *
+                timeElapsed) / (365 days * 1000);
+            stakeData.accumulatedRewards += newRewards;
+            stakeData.lastRewardCalculation = block.timestamp;
+            emit RewardsCalculated(user, stakeIndex, newRewards);
         }
     }
 
-    function unstake(uint256 stakeIndex) external {
+    function unstake(uint256 stakeIndex)
+        external
+        whenNotPaused
+        noContracts
+        notBlacklisted(msg.sender)
+        nonReentrant
+    {
         StakeInfo storage stakeData = userStakes[msg.sender][stakeIndex];
         require(stakeData.active, "Stake not active");
         require(
@@ -204,25 +310,229 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard {
         stakeData.active = false;
 
         _transfer(address(this), msg.sender, totalAmount);
+        emit TokensUnstaked(
+            msg.sender,
+            stakeIndex,
+            stakeData.amount,
+            stakeData.duration,
+            stakeData.accumulatedRewards
+        );
     }
 
-    /**
-     * @dev Updates the minimum staking amount
-     * @param newAmount New minimum amount required for staking
-     */
-    function updateMinStakingAmount(uint256 newAmount) external onlyOwner {
-        require(newAmount > 0, "Invalid amount");
-        MIN_STAKING_AMOUNT = newAmount;
+    // Emergency unstake (sin recompensas)
+    function emergencyUnstake(uint256 stakeIndex)
+        external
+        whenNotPaused
+        noContracts
+        notBlacklisted(msg.sender)
+        nonReentrant
+    {
+        StakeInfo storage stakeData = userStakes[msg.sender][stakeIndex];
+        require(stakeData.active, "Stake not active");
+
+        uint256 amount = stakeData.amount;
+        stakeData.active = false;
+
+        _transfer(address(this), msg.sender, amount);
+        emit TokensUnstaked(
+            msg.sender,
+            stakeIndex,
+            amount,
+            stakeData.duration,
+            0
+        );
     }
 
-    /**
-     * @dev Withdraws ETH/MATIC from the contract
-     * Only callable by contract owner
-     */
-    function withdrawFunds() external onlyOwner {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No funds available");
-        payable(owner()).transfer(balance);
-        emit FundsWithdrawn(balance);
+    // Vesting Functions
+    function createVestingSchedule(
+        address beneficiary,
+        uint256 amount,
+        uint256 duration,
+        uint256 cliff
+    ) external onlyOwner {
+        require(mintedTokens + amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(beneficiary != address(0), "Invalid address");
+        require(duration > cliff, "Duration must be greater than cliff");
+
+        vestingSchedules[beneficiary].push(
+            VestingSchedule({
+                beneficiary: beneficiary,
+                totalAmount: amount,
+                releasedAmount: 0,
+                startTime: block.timestamp,
+                duration: duration,
+                cliff: cliff
+            })
+        );
+
+        totalVestedTokens += amount;
+        mintedTokens += amount;
+        _mint(address(this), amount); // Mints a este contrato para custodio
+
+        emit VestingScheduleCreated(beneficiary, amount, duration);
+    }
+
+    function releaseVestedTokens(uint256 scheduleIndex)
+        external
+        nonReentrant
+        notBlacklisted(msg.sender)
+    {
+        VestingSchedule storage schedule = vestingSchedules[msg.sender][
+            scheduleIndex
+        ];
+        require(
+            block.timestamp >= schedule.startTime + schedule.cliff,
+            "Cliff not passed"
+        );
+
+        uint256 unreleased = releasableAmount(msg.sender, scheduleIndex);
+        require(unreleased > 0, "No tokens to release");
+
+        schedule.releasedAmount += unreleased;
+        totalVestedTokens -= unreleased;
+        _transfer(address(this), msg.sender, unreleased);
+
+        emit TokensReleased(msg.sender, unreleased);
+    }
+
+    function releasableAmount(address beneficiary, uint256 scheduleIndex)
+        public
+        view
+        returns (uint256)
+    {
+        VestingSchedule storage schedule = vestingSchedules[beneficiary][
+            scheduleIndex
+        ];
+
+        if (block.timestamp < schedule.startTime + schedule.cliff) {
+            return 0;
+        } else if (block.timestamp >= schedule.startTime + schedule.duration) {
+            return schedule.totalAmount - schedule.releasedAmount;
+        } else {
+            uint256 timeElapsed = block.timestamp -
+                (schedule.startTime + schedule.cliff);
+            uint256 vestedAmount = (schedule.totalAmount * timeElapsed) /
+                (schedule.duration - schedule.cliff);
+            return vestedAmount - schedule.releasedAmount;
+        }
+    }
+
+    // Transfer Override with Security Features
+    function _transfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    )
+        internal
+        virtual
+        override
+        nonReentrant
+        whenNotPaused
+        notBlacklisted(sender)
+        notBlacklisted(recipient)
+    {
+        require(amount > 0, "Transfer amount must be greater than zero");
+
+        if (
+            BURNING_ACTIVE &&
+            sender != owner() &&
+            recipient != address(this) &&
+            sender != address(this)
+        ) {
+            uint256 burnAmount = (amount * dynamicBurnRate) / 10000;
+            super._burn(sender, burnAmount);
+            burnedTokens += burnAmount;
+            super._transfer(sender, recipient, amount - burnAmount);
+            emit TokensBurned(sender, burnAmount);
+        } else {
+            super._transfer(sender, recipient, amount);
+        }
+    }
+
+    // Manual burn function
+    function burn(uint256 amount) external {
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+        _burn(msg.sender, amount);
+        burnedTokens += amount;
+        emit TokensBurned(msg.sender, amount);
+    }
+
+    // Emergency withdrawal (solo owner)
+    function emergencyWithdraw(uint256 amount) external onlyOwner {
+        require(
+            balanceOf(address(this)) >= amount,
+            "Insufficient contract balance"
+        );
+        _transfer(address(this), owner(), amount);
+        emit FundsWithdrawn(amount);
+    }
+
+    // View Functions
+    function viewCurrentRewards(address user, uint256 stakeIndex)
+        external
+        view
+        returns (uint256)
+    {
+        StakeInfo memory stakeData = userStakes[user][stakeIndex];
+        if (!stakeData.active) return 0;
+
+        uint256 timeElapsed = block.timestamp - stakeData.lastRewardCalculation;
+        uint256 newRewards = (stakeData.amount *
+            stakeData.rewardRate *
+            timeElapsed) / (365 days * 1000);
+
+        return stakeData.accumulatedRewards + newRewards;
+    }
+
+    function getUserStakesCount(address user) external view returns (uint256) {
+        return userStakes[user].length;
+    }
+
+    function getUserVestingCount(address user) external view returns (uint256) {
+        return vestingSchedules[user].length;
+    }
+
+    function getGuardians() external view returns (address[] memory) {
+        return guardians;
+    }
+
+    function getStakeInfo(address user, uint256 stakeIndex)
+        external
+        view
+        returns (StakeInfo memory)
+    {
+        return userStakes[user][stakeIndex];
+    }
+
+    function getVestingInfo(address user, uint256 vestingIndex)
+        external
+        view
+        returns (VestingSchedule memory)
+    {
+        return vestingSchedules[user][vestingIndex];
+    }
+
+    function getContractStats()
+        external
+        view
+        returns (
+            uint256 totalSupply_,
+            uint256 mintedTokens_,
+            uint256 burnedTokens_,
+            uint256 contractBalance_,
+            uint256 totalVestedTokens_,
+            bool burningActive_,
+            uint256 dailyMintLimit_
+        )
+    {
+        return (
+            totalSupply(),
+            mintedTokens,
+            burnedTokens,
+            balanceOf(address(this)),
+            totalVestedTokens,
+            BURNING_ACTIVE,
+            dailyMintLimit
+        );
     }
 }
