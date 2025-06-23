@@ -100,6 +100,7 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
     );
     event TokensReleased(address beneficiary, uint256 amount);
     event DailyMintLimitChanged(uint256 newLimit);
+    event MinStakingAmountChangedDirect(uint256 newAmount);
 
     // Modifiers
     modifier onlyGuardian() {
@@ -230,6 +231,12 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
         MIN_STAKING_AMOUNT = change.newValue;
         emit StakingMinimumChanged(change.newValue);
         delete pendingChanges["MIN_STAKING"];
+    }
+
+    function setMinStakingAmountDirect(uint256 newAmount) external onlyOwner {
+        require(newAmount > 0, "Amount must be greater than zero");
+        MIN_STAKING_AMOUNT = newAmount;
+        emit MinStakingAmountChangedDirect(newAmount);
     }
 
     function setDailyMintLimit(uint256 newLimit) external onlyOwner {
@@ -522,7 +529,8 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
             uint256 contractBalance_,
             uint256 totalVestedTokens_,
             bool burningActive_,
-            uint256 dailyMintLimit_
+            uint256 dailyMintLimit_,
+            uint256 minStakingAmount_
         )
     {
         return (
@@ -532,7 +540,8 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
             balanceOf(address(this)),
             totalVestedTokens,
             BURNING_ACTIVE,
-            dailyMintLimit
+            dailyMintLimit,
+            MIN_STAKING_AMOUNT
         );
     }
 }
