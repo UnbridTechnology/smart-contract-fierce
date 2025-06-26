@@ -7,9 +7,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
 /**
- * @title Fierce Token - Versión Completa con Vesting
- * @dev ERC20 con staking dinámico, quema de tokens, vesting y mecanismos de recompensa
- * Implementa los mejores estándares de seguridad de DeFi
+ * @title Fierce Token - Full version with Vesting
+ * @dev ERC20 with dynamic staking, token burning, vesting and reward mechanisms
+ * Implement DeFi's best-of-breed security standards
  */
 contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
     // Staking structure
@@ -464,7 +464,7 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
         emit TokensBurned(msg.sender, amount);
     }
 
-    // Emergency withdrawal (solo owner)
+    // Emergency withdrawal (owner)
     function emergencyWithdraw(uint256 amount) external onlyOwner {
         require(
             balanceOf(address(this)) >= amount,
