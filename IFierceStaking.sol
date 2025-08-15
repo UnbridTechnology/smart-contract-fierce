@@ -35,8 +35,11 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
         uint256 totalEmitted;
     }
 
+    // ===== STATE VARIABLE =====
+    bool public claimsEnabled; //Enable claims
+
     // Constants
-    uint256 public constant TOKENS_PER_BLOCK = 101.21 * 10**18;
+    uint256 public constant TOKENS_PER_BLOCK = 21.71 * 10**18;
     uint256 public constant EMISSION_DURATION_BLOCKS = 47304000; // ~36 months on Polygon (~2.3s blocks)
     uint256 public constant PRECISION = 1e12; // Precision for reward calculations
 
@@ -84,9 +87,19 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
         _;
     }
 
+    modifier onlyWhenClaimsEnabled() {
+        require(claimsEnabled, "Claim de recompensas deshabilitado");
+        _;
+    }
+
     constructor(address _token) Ownable(msg.sender) {
         token = FierceToken(_token);
         lastUpdateBlock = block.number;
+    }
+
+    // ===== CONTROL CLAIMS =====
+    function setClaimsEnabled(bool _enabled) external onlyOwner {
+        claimsEnabled = _enabled;
     }
 
     // ===== STAKING SYSTEM MANAGEMENT =====
@@ -223,7 +236,7 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     /**
      * @dev Claim accumulated rewards without unstaking
      */
-    function claimBlockStakeRewards() external whenNotPaused nonReentrant {
+    function claimBlockStakeRewards() external whenNotPaused nonReentrant onlyWhenClaimsEnabled {
         require(useBlockStakeSystem, "BlockStake system not active");
 
         updatePool();
@@ -298,9 +311,9 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     function getCurrentAPY() external view returns (uint256) {
         if (!useBlockStakeSystem || totalStakedTokens == 0) return 0;
 
-        uint256 blocksPerYear = 1587; //aprox
-        uint256 annualEmission = TOKENS_PER_BLOCK * blocksPerYear;
-        return (annualEmission * 100) / totalStakedTokens;
+       uint256 blocksPerYear = 365 days * (1 hours / 2.3 seconds); // ~13.8M bloques
+       uint256 annualEmission = TOKENS_PER_BLOCK * blocksPerYear;
+       return (annualEmission * 100) / totalStakedTokens;
     }
 
     /**
@@ -460,4 +473,18 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     function checkInitialFunding() external view returns (uint256) {
         return token.balanceOf(address(this));
     }
+
+    function emergencyWithdraw() external onlyOwner {
+        uint256 balance = token.balanceOf(address(this));
+        require(balance > 0, "No hay fondos para retirar");
+
+        // Transfiere todos los tokens Fierce al owner
+        token.transfer(owner(), balance);
+
+        // Opcional: Pausar el contrato para evitar más staking/rewards
+        _pause();
+    }
+
+
+
 }
