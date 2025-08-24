@@ -476,12 +476,8 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
 
     function emergencyWithdraw() external onlyOwner {
         uint256 balance = token.balanceOf(address(this));
-        require(balance > 0, "No hay fondos para retirar");
-
-        // Transfiere todos los tokens Fierce al owner
+        require(balance > 0, "No funds to withdraw");
         token.transfer(owner(), balance);
-
-        // Opcional: Pausar el contrato para evitar más staking/rewards
         _pause();
     }
 

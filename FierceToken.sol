@@ -42,7 +42,6 @@ contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
     uint256 public constant MAX_BURN_RATE = 1000; // 10%
     uint256 public constant MIN_BURN_RATE = 50; // 0.5%
     uint256 public maxRewardAccumulationPeriod = 30 days;
-    uint256 public immutable MAX_STAKING_SUPPLY;
     uint256 public stakingMinted; // Acumulador
     uint256 public stakingFundsMinted;
 
@@ -141,7 +140,6 @@ contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         Ownable(_initialOwner)
     {
         MIN_STAKING_AMOUNT = _initialMinStakingAmount;
-        MAX_STAKING_SUPPLY = (MAX_SUPPLY * 25) / 100; // 25% del total
         dynamicBurnRate = 150; // Initial 1.5%
         guardians.push(_initialOwner);
         isGuardian[_initialOwner] = true;
@@ -649,14 +647,4 @@ contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
         _transfer(address(this), owner(), amount);
     }
 
-    function fundStakingContract(address _stakingContractAddress)
-        external
-        onlyOwner
-    {
-        require(_stakingContractAddress != address(0), "Invalid address");
-        _mint(_stakingContractAddress, MAX_STAKING_SUPPLY);
-        stakingFundsMinted = MAX_STAKING_SUPPLY;
-
-        emit StakingContractFunded(_stakingContractAddress, MAX_STAKING_SUPPLY);
-    }
 }
