@@ -40,8 +40,9 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
 
     // Constants
     uint256 public constant TOKENS_PER_BLOCK = 21.71 * 10**18;
-    uint256 public constant EMISSION_DURATION_BLOCKS = 47304000; // ~36 months on Polygon (~2.3s blocks)
+    uint256 public constant EMISSION_DURATION_BLOCKS = 41215304; // ~36 months on Polygon (~2.3s blocks)
     uint256 public constant PRECISION = 1e12; // Precision for reward calculations
+    uint256 public constant POLYGON_BLOCKS_PER_YEAR = 13711304; 
 
     // State variables
     bool public useBlockStakeSystem = false;
@@ -308,14 +309,12 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
      * @dev Get current APY for BlockStake system
      * @return Current APY as percentage (scaled by 100)
      */
-    function getCurrentAPY() external view returns (uint256) {
-        if (!useBlockStakeSystem || totalStakedTokens == 0) return 0;
-
-       uint256 blocksPerYear = 365 days * (1 hours / 2.3 seconds); // ~13.8M bloques
-       uint256 annualEmission = TOKENS_PER_BLOCK * blocksPerYear;
-       return (annualEmission * 100) / totalStakedTokens;
-    }
-
+function getCurrentAPY() external view returns (uint256) {
+    if (!useBlockStakeSystem || totalStakedTokens == 0) return 0;
+    
+    uint256 annualEmission = TOKENS_PER_BLOCK * POLYGON_BLOCKS_PER_YEAR;
+    return (annualEmission * 100) / totalStakedTokens;
+}
     /**
      * @dev Get BlockStake system stats
      */

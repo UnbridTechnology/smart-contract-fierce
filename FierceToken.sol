@@ -332,6 +332,22 @@ contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
+     * @dev Mint tokens for staking
+     * @param to Address to receive tokens
+     * @param amount Amount to mint
+     */
+    function mintForStaking(
+        address to,
+        uint256 amount
+    ) external onlyOwner whenNotPaused {
+        require(mintedTokens + amount <= MAX_SUPPLY, "Exceeds maximum supply");
+        _mint(to, amount);
+        mintedTokens += amount;
+        mintedInPeriod += amount;
+        emit TokensMinted(to, amount, "STAKING_REWARDS");
+    }
+
+    /**
      * @dev Override transfer function with burn and security features
      */
     function _transfer(
