@@ -42,7 +42,7 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     uint256 public constant TOKENS_PER_BLOCK = 21.71 * 10**18;
     uint256 public constant EMISSION_DURATION_BLOCKS = 41215304; // ~36 months on Polygon (~2.3s blocks)
     uint256 public constant PRECISION = 1e12; // Precision for reward calculations
-    uint256 public constant POLYGON_BLOCKS_PER_YEAR = 13711304; 
+    uint256 public constant POLYGON_BLOCKS_PER_YEAR = 13711304;
 
     // State variables
     bool public useBlockStakeSystem = false;
@@ -202,6 +202,50 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
+     * @dev Stake tokens in BlockStake system on behalf of another user (Owner only)
+     * @param user Address of the user to stake for
+     * @param amount Amount of tokens to stake
+     */
+    function blockStakeFor(address user, uint256 amount)
+        external
+        onlyOwner
+        whenNotPaused
+        nonReentrant
+        onlyActiveEmission
+    {
+        require(amount >= token.MIN_STAKING_AMOUNT(), "Amount below minimum");
+        require(token.balanceOf(user) >= amount, "Insufficient balance");
+
+        updatePool();
+
+        uint256 pending = calculatePendingRewards(user);
+        if (pending > 0) {
+            userPendingRewards[user] += pending;
+        }
+
+        token.transferFrom(user, address(this), amount);
+
+        blockStakes[user].push(
+            BlockStake({
+                amount: amount,
+                rewardDebt: (amount * accTokensPerShare) / PRECISION,
+                stakeBlock: block.number,
+                active: true
+            })
+        );
+
+        totalStakedTokens += amount;
+        userStakedAmount[user] += amount;
+
+        emit BlockStakeStaked(
+            user,
+            blockStakes[user].length - 1,
+            amount,
+            block.number
+        );
+    }
+
+    /**
      * @dev Unstake tokens from BlockStake system
      * @param stakeId Index of the stake to unstake
      */
@@ -235,9 +279,59 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
+     * @dev Unstake all active stakes from BlockStake system
+     */
+    function blockUnstakeAll() external whenNotPaused nonReentrant {
+        require(useBlockStakeSystem, "BlockStake system not active");
+        require(blockStakes[msg.sender].length > 0, "No stakes found");
+
+        updatePool();
+
+        uint256 totalAmountToUnstake = 0;
+        uint256 totalRewards = userPendingRewards[msg.sender];
+        uint256 activeStakesCount = 0;
+
+        // Calculate total rewards from all active stakes
+        for (uint256 i = 0; i < blockStakes[msg.sender].length; i++) {
+            BlockStake storage stake = blockStakes[msg.sender][i];
+            if (stake.active) {
+                uint256 stakeRewards = ((stake.amount * accTokensPerShare) /
+                    PRECISION) - stake.rewardDebt;
+                totalRewards += stakeRewards;
+                totalAmountToUnstake += stake.amount;
+                stake.active = false;
+                activeStakesCount++;
+            }
+        }
+
+        require(activeStakesCount > 0, "No active stakes to unstake");
+
+        // Update state variables
+        totalStakedTokens -= totalAmountToUnstake;
+        userStakedAmount[msg.sender] -= totalAmountToUnstake;
+        userPendingRewards[msg.sender] = 0;
+
+        // Transfer all tokens and rewards
+        uint256 totalAmount = totalAmountToUnstake + totalRewards;
+        token.transfer(msg.sender, totalAmount);
+
+        emit BlockStakeUnstaked(
+            msg.sender,
+            type(uint256).max, // Special ID indicating "all stakes"
+            totalAmountToUnstake,
+            totalRewards
+        );
+    }
+
+    /**
      * @dev Claim accumulated rewards without unstaking
      */
-    function claimBlockStakeRewards() external whenNotPaused nonReentrant onlyWhenClaimsEnabled {
+    function claimBlockStakeRewards()
+        external
+        whenNotPaused
+        nonReentrant
+        onlyWhenClaimsEnabled
+    {
         require(useBlockStakeSystem, "BlockStake system not active");
 
         updatePool();
@@ -260,6 +354,58 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
 
         emit BlockStakeRewardsClaimed(msg.sender, totalPending);
     }
+
+/**
+ * @dev Claim and automatically restake rewards for a user (Owner only)
+ * @param user Address of the user to claim and restake for
+ */
+function claimAndStake(address user)
+    external
+    onlyOwner
+    whenNotPaused
+    nonReentrant
+    onlyWhenClaimsEnabled
+{
+    require(useBlockStakeSystem, "BlockStake system not active");
+    
+    updatePool();
+
+    uint256 totalPending = calculatePendingRewards(user) + userPendingRewards[user];
+    require(totalPending > 0, "No rewards to claim and stake");
+
+    // Reset pending rewards and update reward debt for all active stakes
+    for (uint256 i = 0; i < blockStakes[user].length; i++) {
+        BlockStake storage stake = blockStakes[user][i];
+        if (stake.active) {
+            stake.rewardDebt = (stake.amount * accTokensPerShare) / PRECISION;
+        }
+    }
+
+    userPendingRewards[user] = 0;
+
+    // Instead of transferring, we create a new stake with the rewards
+    blockStakes[user].push(
+        BlockStake({
+            amount: totalPending,
+            rewardDebt: (totalPending * accTokensPerShare) / PRECISION,
+            stakeBlock: block.number,
+            active: true
+        })
+    );
+
+    totalStakedTokens += totalPending;
+    userStakedAmount[user] += totalPending;
+
+    emit BlockStakeStaked(
+        user,
+        blockStakes[user].length - 1,
+        totalPending,
+        block.number
+    );
+    
+    // Emit additional event to indicate auto-restaking
+    emit BlockStakeRewardsClaimed(user, totalPending);
+}
 
     // ===== VIEW FUNCTIONS =====
 
@@ -309,12 +455,13 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
      * @dev Get current APY for BlockStake system
      * @return Current APY as percentage (scaled by 100)
      */
-function getCurrentAPY() external view returns (uint256) {
-    if (!useBlockStakeSystem || totalStakedTokens == 0) return 0;
-    
-    uint256 annualEmission = TOKENS_PER_BLOCK * POLYGON_BLOCKS_PER_YEAR;
-    return (annualEmission * 100) / totalStakedTokens;
-}
+    function getCurrentAPY() external view returns (uint256) {
+        if (!useBlockStakeSystem || totalStakedTokens == 0) return 0;
+
+        uint256 annualEmission = TOKENS_PER_BLOCK * POLYGON_BLOCKS_PER_YEAR;
+        return (annualEmission * 100) / totalStakedTokens;
+    }
+
     /**
      * @dev Get BlockStake system stats
      */
@@ -479,7 +626,4 @@ function getCurrentAPY() external view returns (uint256) {
         token.transfer(owner(), balance);
         _pause();
     }
-
-
-
 }
