@@ -51,7 +51,7 @@ contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
     uint256 public MIN_STAKING_AMOUNT;
     bool public BURNING_ACTIVE;
     uint256 public dynamicBurnRate;
-    uint256 public dailyMintLimit = 1000000 * 10**18;
+    uint256 public dailyMintLimit = 100000000 * 10**18;
     uint256 public lastMintTime;
     uint256 public mintedInPeriod;
     uint256 public totalVestedTokens;
