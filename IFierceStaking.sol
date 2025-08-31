@@ -827,4 +827,13 @@ function blockStakeFromMint(address user, uint256 amount)
             return (false, "Insufficient funding - minimum 800M required");
         }
     }
+
+    // Agregar estas funciones para facilitar la lectura
+function getTotalStaked() external view returns (uint256) {
+    return totalStakedTokens;
+}
+
+function getUserStakeInfo(address user) external view returns (uint256 amount, bool hasActiveStakes) {
+    return (userStakedAmount[user], userStakedAmount[user] > 0);
+}
 }
