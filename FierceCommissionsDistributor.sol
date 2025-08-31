@@ -10,7 +10,7 @@ import "./FierceToken.sol";
 
 /**
  * @title Fierce Commission Distributor with Blacklist
- * @dev Distribuye comisiones con sistema de lista negra para cumplimiento de políticas
+ * @dev Distributes commissions with blacklist system for policy compliance
  */
 contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -27,34 +27,34 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 timestamp;
         address token;
         uint256 amount;
-        uint256 totalEligibleStake; // Stake total de usuarios no blacklisted
+        uint256 totalEligibleStake; // Total stake of non-blacklisted users
     }
 
     struct UserSnapshot {
         uint256 userStakedAtDeposit;
         uint256 claimedAmount;
-        bool wasBlacklisted; // Si estaba blacklisted al momento del depósito
+        bool wasBlacklisted; // If the user was blacklisted at deposit time
     }
 
-    // Mappings para snapshots y blacklist
+    // Mappings for snapshots and blacklist
     mapping(uint256 => DepositSnapshot) public depositSnapshots;
     mapping(uint256 => mapping(address => UserSnapshot)) public userSnapshots;
     mapping(address => bool) public isBlacklisted;
     mapping(address => string) public blacklistReasons;
     mapping(address => uint256) public blacklistTimestamps;
     
-    // Listas para tracking
+    // Lists for tracking
     address[] public blacklistedAddresses;
     
-    // Contadores
+    // Counters
     uint256 public depositCounter;
     uint256 public totalDistributed;
     
-    // Staking en nuevo contrato (post-36 meses)
+    // Staking in new contract (post-36 months)
     mapping(address => uint256) public newContractStakes;
     uint256 public totalNewContractStakes;
     
-    // Control de estados
+    // State control
     bool public emissionPeriodOver;
     uint256 public emissionEndBlock;
 
@@ -71,6 +71,11 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 indexed depositId,
         address indexed token,
         uint256 amount
+    );
+    event AllCommissionsClaimed(
+        address indexed user,
+        uint256 totalAmount,
+        uint256 depositsClaimed
     );
     event NewStakeDeposited(address indexed user, uint256 amount);
     event NewStakeWithdrawn(address indexed user, uint256 amount);
@@ -101,10 +106,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         emissionEndBlock = fierceStaking.emissionEndBlock();
     }
 
-    // ===== FUNCIONES PRINCIPALES =====
+    // ===== MAIN FUNCTIONS =====
 
     /**
-     * @dev Depositar comisiones para distribución (considerando blacklist)
+     * @dev Deposit commissions for distribution (considering blacklist)
      */
     function depositCommissions(uint256 amount, address erc20Token) 
         external 
@@ -126,7 +131,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
             );
         }
 
-        // Tomar snapshot del estado actual considerando blacklist
+        // Take snapshot of current state considering blacklist
         uint256 currentTotalStaked = getTotalStakedInEcosystem();
         uint256 currentEligibleStake = getTotalEligibleStake();
         
@@ -137,9 +142,6 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
             amount: depositAmount,
             totalEligibleStake: currentEligibleStake
         });
-
-        // Tomar snapshots de usuarios
-        _takeUserSnapshots(depositCounter);
 
         emit CommissionDeposited(
             depositCounter,
@@ -154,7 +156,62 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Reclamar comisiones (solo usuarios no blacklisted)
+     * @dev Claim all pending commissions from all deposits (RWA-earnings style)
+     */
+    function claimAllCommissions() external nonReentrant notBlacklisted(msg.sender) {
+        uint256 totalClaimable = 0;
+        uint256 depositsClaimed = 0;
+        
+        // Temporary storage for gas optimization
+        address currentToken;
+        uint256 currentAmount;
+        
+        for (uint256 i = 0; i < depositCounter; i++) {
+            DepositSnapshot storage deposit = depositSnapshots[i];
+            if (deposit.amount == 0) continue;
+
+            UserSnapshot storage userSnapshot = userSnapshots[i][msg.sender];
+            if (userSnapshot.wasBlacklisted) continue;
+
+            uint256 userShare = calculateUserShare(
+                userSnapshot.userStakedAtDeposit,
+                deposit.totalEligibleStake
+            );
+            
+            uint256 userReward = (deposit.amount * userShare) / PRECISION;
+            if (userReward > userSnapshot.claimedAmount) {
+                uint256 claimableAmount = userReward - userSnapshot.claimedAmount;
+                
+                // Batch same token transfers
+                if (deposit.token == currentToken) {
+                    currentAmount += claimableAmount;
+                } else {
+                    // Transfer previous batch
+                    if (currentAmount > 0) {
+                        _transferTokens(currentToken, msg.sender, currentAmount);
+                    }
+                    currentToken = deposit.token;
+                    currentAmount = claimableAmount;
+                }
+                
+                totalClaimable += claimableAmount;
+                userSnapshot.claimedAmount = userReward;
+                depositsClaimed++;
+            }
+        }
+        
+        // Transfer final batch
+        if (currentAmount > 0) {
+            _transferTokens(currentToken, msg.sender, currentAmount);
+        }
+
+        require(totalClaimable > 0, "No rewards to claim");
+        
+        emit AllCommissionsClaimed(msg.sender, totalClaimable, depositsClaimed);
+    }
+
+    /**
+     * @dev Claim commissions from a specific deposit (backward compatibility)
      */
     function claimCommission(uint256 depositId) external nonReentrant notBlacklisted(msg.sender) {
         require(depositId < depositCounter, "Invalid deposit ID");
@@ -165,7 +222,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         UserSnapshot storage userSnapshot = userSnapshots[depositId][msg.sender];
         require(!userSnapshot.wasBlacklisted, "User was blacklisted at deposit time");
 
-        // Calcular participación del usuario
+        // Calculate user share
         uint256 userShare = calculateUserShare(
             userSnapshot.userStakedAtDeposit,
             deposit.totalEligibleStake
@@ -177,16 +234,11 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
 
         uint256 claimableAmount = userReward - userSnapshot.claimedAmount;
         
-        // Actualizar montos reclamados
+        // Update claimed amounts
         userSnapshot.claimedAmount = userReward;
         
-        // Distribuir recompensa
-        if (deposit.token == address(0)) {
-            (bool success, ) = msg.sender.call{value: claimableAmount}("");
-            require(success, "MATIC transfer failed");
-        } else {
-            IERC20(deposit.token).safeTransfer(msg.sender, claimableAmount);
-        }
+        // Distribute reward
+        _transferTokens(deposit.token, msg.sender, claimableAmount);
 
         emit CommissionClaimed(
             msg.sender,
@@ -196,10 +248,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         );
     }
 
-    // ===== SISTEMA DE BLACKLIST =====
+    // ===== BLACKLIST SYSTEM =====
 
     /**
-     * @dev Agregar dirección a blacklist
+     * @dev Add address to blacklist
      */
     function addToBlacklist(address wallet, string memory reason) external onlyOwner {
         require(!isBlacklisted[wallet], "Already blacklisted");
@@ -213,7 +265,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Remover dirección de blacklist
+     * @dev Remove address from blacklist
      */
     function removeFromBlacklist(address wallet) external onlyOwner {
         require(isBlacklisted[wallet], "Not blacklisted");
@@ -225,7 +277,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Aplicar blacklist retroactivamente a un depósito específico
+     * @dev Apply blacklist retroactively to a specific deposit
      */
     function enforceBlacklistOnDeposit(uint256 depositId, address[] memory wallets) external onlyOwner {
         require(depositId < depositCounter, "Invalid deposit ID");
@@ -240,10 +292,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         emit BlacklistEnforced(depositId, wallets);
     }
 
-    // ===== FUNCIONES DE STAKING POST-36 MESES =====
+    // ===== POST-36 MONTHS STAKING FUNCTIONS =====
 
     /**
-     * @dev Stake en nuevo contrato (solo usuarios no blacklisted)
+     * @dev Stake in new contract (only non-blacklisted users)
      */
     function stakeInNewContract(uint256 amount) external onlyAfterEmission nonReentrant notBlacklisted(msg.sender) {
         require(amount > 0, "Amount must be > 0");
@@ -271,23 +323,24 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         emit NewStakeWithdrawn(msg.sender, amount);
     }
 
-    // ===== FUNCIONES INTERNAS =====
+    // ===== INTERNAL FUNCTIONS =====
 
     /**
-     * @dev Tomar snapshots de todos los usuarios para un depósito
+     * @dev Internal function for token transfer
      */
-    function _takeUserSnapshots(uint256 depositId) internal {
-        // Esta función debería ser optimizada para gas en mainnet
-        // En producción, considera usar un sistema off-chain o paginado
-        
-        // Para demostración, aquí se toma snapshot de todos
-        // En producción, implementar mecanismo más eficiente
+    function _transferTokens(address token, address to, uint256 amount) internal {
+        if (token == address(0)) {
+            (bool success, ) = to.call{value: amount}("");
+            require(success, "MATIC transfer failed");
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
     }
 
-    // ===== FUNCIONES DE ADMIN =====
+    // ===== ADMIN FUNCTIONS =====
 
     /**
-     * @dev Marcar fin del período de emisión
+     * @dev Mark the end of emission period
      */
     function markEmissionPeriodEnded() external onlyOwner {
         require(!emissionPeriodOver, "Emission already ended");
@@ -312,7 +365,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     // ===== VIEW FUNCTIONS =====
 
     /**
-     * @dev Obtener stake elegible total (excluyendo blacklisted)
+     * @dev Get total eligible stake (excluding blacklisted)
      */
     function getTotalEligibleStake() public view returns (uint256) {
         uint256 totalStake = getTotalStakedInEcosystem();
@@ -329,7 +382,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Obtener stake total del usuario
+     * @dev Get user's total stake
      */
     function getUserTotalStake(address user) public view returns (uint256) {
         if (isBlacklisted[user]) return 0;
@@ -339,7 +392,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Obtener stake total del ecosistema
+     * @dev Get total stake in ecosystem
      */
     function getTotalStakedInEcosystem() public view returns (uint256) {
         uint256 legacyTotal = emissionPeriodOver ? 0 : fierceStaking.getTotalStaked();
@@ -347,7 +400,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Calcular participación del usuario
+     * @dev Calculate user share
      */
     function calculateUserShare(uint256 userStake, uint256 totalStake) 
         public 
@@ -359,7 +412,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Verificar estado de blacklist de un usuario
+     * @dev Check user's blacklist status
      */
     function getBlacklistStatus(address wallet) external view returns (
         bool blacklisted, 
@@ -374,14 +427,14 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Obtener todas las direcciones blacklisted
+     * @dev Get all blacklisted addresses
      */
     function getAllBlacklistedAddresses() external view returns (address[] memory) {
         return blacklistedAddresses;
     }
 
     /**
-     * @dev Calcular recompensas pendientes de un usuario
+     * @dev Calculate user's pending rewards
      */
     function getPendingRewards(address user) external view returns (uint256 totalPending) {
         if (isBlacklisted[user]) return 0;
@@ -404,6 +457,28 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
             totalPending += pending;
         }
         return totalPending;
+    }
+
+    /**
+     * @dev Get user snapshot for a specific deposit
+     */
+    function getUserSnapshot(address user, uint256 depositId) 
+        external 
+        view 
+        returns (UserSnapshot memory) 
+    {
+        return userSnapshots[depositId][user];
+    }
+
+    /**
+     * @dev Get estimated gas for claimAllCommissions
+     */
+    function estimateClaimGas(address user) external view returns (uint256) {
+        // Base gas + per deposit gas estimation
+        uint256 baseGas = 21000;
+        uint256 perDepositGas = 3000;
+        
+        return baseGas + (depositCounter * perDepositGas);
     }
 
     // ===== RECEIVE FUNCTION =====
