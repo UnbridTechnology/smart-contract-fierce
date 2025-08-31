@@ -202,11 +202,11 @@ contract FierceStaking is Ownable, ReentrancyGuard, Pausable {
 
     // ===== STAKING FUNCTIONS =====
 
-    /**
-     
+/**
 @dev Stake tokens in BlockStake system on behalf of another user (Owner only)
 @param user Address of the user to stake for
-@param amount Amount of tokens to stake*/,
+@param amount Amount of tokens to stake
+*/
 function blockStakeFromMint(address user, uint256 amount)
     external
     onlyOwner
@@ -214,9 +214,7 @@ function blockStakeFromMint(address user, uint256 amount)
     nonReentrant
     onlyActiveEmission{
     require(amount >= token.MIN_STAKING_AMOUNT(), "Amount below minimum");
-    require(token.balanceOf(msg.sender) >= amount, "Insufficient balance");,
-,
-
+    require(token.balanceOf(msg.sender) >= amount, "Insufficient balance");
         updatePool();
 
         uint256 pending = calculatePendingRewards(user);
