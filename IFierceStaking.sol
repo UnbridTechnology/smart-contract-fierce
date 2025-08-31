@@ -826,7 +826,6 @@ function blockStakeFromMint(address user, uint256 amount)
         }
     }
 
-    // Agregar estas funciones para facilitar la lectura
 function getTotalStaked() external view returns (uint256) {
     return totalStakedTokens;
 }
