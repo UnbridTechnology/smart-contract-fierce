@@ -105,10 +105,7 @@ contract Fierce is ERC20, Ownable, ReentrancyGuard, Pausable {
 event TokensMinted(
     address indexed to, 
     uint256 amount, 
-    string reason,
-    uint256 timestamp,
-    uint256 totalMintedToDate,
-    uint256 dailyMintedSoFar
+    string reason
 );
     event TokensBurned(address indexed from, uint256 amount);
     event TokensStaked(
@@ -272,7 +269,7 @@ function mintForActivity(
 function _isValidMintingReason(bytes32 reasonHash) internal pure returns (bool) {
     return (
         reasonHash == keccak256(abi.encodePacked("ICO_MINT")) ||
-        reasonHash == keccak256(abi.encodePacked("INNOVATION_ACQUISITION)) ||
+        reasonHash == keccak256(abi.encodePacked("INNOVATION_ACQUISITION")) ||
         reasonHash == keccak256(abi.encodePacked("UPN_ECOSYSTEM")) ||
         reasonHash == keccak256(abi.encodePacked("STAKING_REWARDS")) ||
         reasonHash == keccak256(abi.encodePacked("LIQUIDITY_PROVISION")) ||
