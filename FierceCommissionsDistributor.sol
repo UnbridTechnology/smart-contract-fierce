@@ -15,7 +15,7 @@ import "./FierceToken.sol";
  * syncing with the staking contract to register stakers and distribute
  * commissions based on an accumulated model.
  */
-contract FierceCommissionDistributorV2 is Ownable, ReentrancyGuard {
+contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ===== CONSTANTS & IMMUTABLES =====
@@ -38,6 +38,9 @@ contract FierceCommissionDistributorV2 is Ownable, ReentrancyGuard {
     address[] public allStakers;
     mapping(address => bool) public registeredStakers;
     mapping(address => bool) public isBlacklisted;
+    // STATE VARIABLES - AGREGAR
+    mapping(address => uint256) public totalWeightSnapshotByToken;
+    mapping(address => mapping(address => uint256)) public userStakeSnapshotByToken;
 
     // Lógica para el período de emisión de FierceStaking
     bool public emissionPeriodOver;
@@ -140,13 +143,22 @@ contract FierceCommissionDistributorV2 is Ownable, ReentrancyGuard {
         tokenContract.safeTransferFrom(msg.sender, address(this), _amount);
 
         uint256 totalEligibleStake = _calculateTotalEligibleStake();
-        
-        // Agregar al total acumulado de comisiones y actualizar el stake total elegible
-        totalCommissionsByToken[_token] += _amount;
-        totalEligibleStakeByToken[_token] = totalEligibleStake;
 
-        emit CommissionsDeposited(_token, _amount, totalEligibleStake);
-    }
+        // AGREGAR: Tomar snapshot de todos los stakers registrados
+        for (uint i = 0; i < allStakers.length; i++) {
+            address staker = allStakers[i];
+            if (registeredStakers[staker] && !isBlacklisted[staker]) {
+                userStakeSnapshotByToken[_token][staker] = getUserTotalStake(staker);
+            }
+        }
+    
+    // Agregar al total acumulado de comisiones y actualizar el stake total elegible
+    totalCommissionsByToken[_token] += _amount;
+    totalEligibleStakeByToken[_token] = totalEligibleStake;
+    totalWeightSnapshotByToken[_token] = totalEligibleStake; // ✅ Snapshot del peso total
+
+    emit CommissionsDeposited(_token, _amount, totalEligibleStake);
+}
 
     /**
      * @dev Claims pending rewards for a user for a specific token.
@@ -155,14 +167,17 @@ contract FierceCommissionDistributorV2 is Ownable, ReentrancyGuard {
     function claimRewards(address _token) external nonReentrant {
         uint256 pendingRewards = getPendingRewards(msg.sender, _token);
         require(pendingRewards > 0, "No pending rewards to claim");
-
-        // Actualizar el monto reclamado antes de la transferencia para evitar reentrancy
+    
+        // ✅ Verificar que el usuario tenía stake en el momento del depósito
+        require(userStakeSnapshotByToken[_token][msg.sender] > 0, "No eligible stake at deposit time");
+    
+        // Actualizar el monto reclamado antes de la transferencia
         totalClaimedByTokenAndUser[_token][msg.sender] += pendingRewards;
-
+    
         // Transferir los tokens
         IERC20 tokenContract = IERC20(_token);
         tokenContract.safeTransfer(msg.sender, pendingRewards);
-
+    
         emit RewardsClaimed(msg.sender, _token, pendingRewards);
     }
 
@@ -175,15 +190,16 @@ contract FierceCommissionDistributorV2 is Ownable, ReentrancyGuard {
      * @return The amount of pending rewards.
      */
     function getPendingRewards(address user, address token) public view returns (uint256) {
-        // Obtenemos los totales acumulados del token
         uint256 totalEarnings = totalCommissionsByToken[token];
-        uint256 totalEligible = totalEligibleStakeByToken[token];
+        uint256 totalEligible = totalWeightSnapshotByToken[token]; // ✅ Usar snapshot
 
         if (totalEarnings == 0 || totalEligible == 0) {
             return 0;
         }
 
-        uint256 userStake = getUserTotalStake(user);
+        // ✅ Usar snapshot del usuario en lugar del stake actual
+        uint256 userStake = userStakeSnapshotByToken[token][user];
+
         if (isBlacklisted[user] || userStake == 0) {
             return 0;
         }
