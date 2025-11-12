@@ -41,12 +41,12 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
     bool public claimsEnabled;
 
     // Constants
-    uint256 public constant TOKENS_PER_BLOCK = 21.71 * 10**18;
+    uint256 public constant TOKENS_PER_BLOCK = 21.14 * 10**18;
     uint256 public constant EMISSION_DURATION_BLOCKS = 41215304; // ~36 months on Polygon
     uint256 public constant PRECISION = 1e12;
     uint256 public constant POLYGON_BLOCKS_PER_YEAR = 13711304;
     uint256 public constant MINIMUM_INITIAL_FUNDING = 800_000_000 * 10**18; // 800M minimum
-    uint256 public constant TOTAL_EXPECTED_EMISSION = 894_784_550 * 10**18; // 894.78M total
+    uint256 public constant TOTAL_EXPECTED_EMISSION = 1_000_000_000 * 10**18; // 1B total staking allocation
 
     // State variables
     bool public useBlockStakeSystem = false;
