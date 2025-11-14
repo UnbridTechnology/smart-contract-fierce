@@ -418,39 +418,36 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
     function blockUnstakeAll() external whenNotPaused nonReentrant {
         require(useBlockStakeSystem, "BlockStake system not active");
         require(blockStakes[msg.sender].length > 0, "No stakes found");
-
+    
         updatePool();
-
+    
         uint256 totalAmountToUnstake = 0;
         uint256 totalRewards = userPendingRewards[msg.sender];
         uint256 activeStakesCount = 0;
+        
         for (uint256 i = 0; i < blockStakes[msg.sender].length; i++) {
             BlockStake storage stake = blockStakes[msg.sender][i];
             if (stake.active) {
-                uint256 stakeRewards = ((stake.amount * accTokensPerShare) /
-                    PRECISION) - stake.rewardDebt;
+                uint256 stakeRewards = ((stake.amount * accTokensPerShare) / PRECISION) - stake.rewardDebt;
                 totalRewards += stakeRewards;
                 totalAmountToUnstake += stake.amount;
                 stake.active = false;
+                stake.rewardDebt = 0;
                 activeStakesCount++;
             }
         }
-
+    
         require(activeStakesCount > 0, "No active stakes to unstake");
+        
         totalStakedTokens -= totalAmountToUnstake;
         userStakedAmount[msg.sender] -= totalAmountToUnstake;
         userPendingRewards[msg.sender] = 0;
         _registerStaker(msg.sender);
-
+    
         uint256 totalAmount = totalAmountToUnstake + totalRewards;
         token.transfer(msg.sender, totalAmount);
-
-        emit BlockStakeUnstaked(
-            msg.sender,
-            type(uint256).max,
-            totalAmountToUnstake,
-            totalRewards
-        );
+    
+        emit BlockStakeUnstaked(msg.sender, type(uint256).max, totalAmountToUnstake, totalRewards);
     }
 
     /**

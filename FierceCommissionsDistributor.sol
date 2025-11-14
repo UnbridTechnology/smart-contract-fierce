@@ -167,17 +167,15 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     function claimRewards(address _token) external nonReentrant {
         uint256 pendingRewards = getPendingRewards(msg.sender, _token);
         require(pendingRewards > 0, "No pending rewards to claim");
-
-        // ✅ Verificar que el usuario tenía stake en el momento del depósito
         require(userStakeSnapshotByToken[_token][msg.sender] > 0, "No eligible stake at deposit time");
-
-        // Actualizar el monto reclamado antes de la transferencia
+    
+        userStakeSnapshotByToken[_token][msg.sender] = 0;
+        
         totalClaimedByTokenAndUser[_token][msg.sender] += pendingRewards;
-
-        // Transferir los tokens
+    
         IERC20 tokenContract = IERC20(_token);
         tokenContract.safeTransfer(msg.sender, pendingRewards);
-
+    
         emit RewardsClaimed(msg.sender, _token, pendingRewards);
     }
 
