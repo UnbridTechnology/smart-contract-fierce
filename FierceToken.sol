@@ -35,7 +35,7 @@ import "./TraditionalStaking.sol";
  * ✅ Emergency Pause Functionality
  * ✅ Time-delayed Administrative Actions
  * ✅ Daily Mint Limits & Supply Caps
- * ✅ Burn Rate Boundaries (MIN_BURN_RATE - MAX_BURN_RATE)
+ * ✅ Burn Rate Boundaries (MIN_BURN_RATE - MAX_BURN_RATE)zzz
  * ✅ Comprehensive Event Logging
  *
  * ECONOMIC SAFEGUARDS:
@@ -47,7 +47,7 @@ import "./TraditionalStaking.sol";
  */
 contract FierceToken is ERC20, Ownable, ReentrancyGuard, Pausable {
     // Interfaces
-    FierceStaking public stakingContract;
+    RewardStaking public stakingContract;
     TraditionalStaking public tokenStaking;
 
     // Constants
@@ -306,7 +306,7 @@ function setStakingContract(address _stakingContract) external onlyOwner {
         _isValidWhitelistedContract(_stakingContract),
         "Invalid contract address"
     );
-    stakingContract = FierceStaking(_stakingContract);
+    stakingContract = RewardStaking(_stakingContract);
 }
 
     /**

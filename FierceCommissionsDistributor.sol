@@ -21,7 +21,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     // ===== CONSTANTS & IMMUTABLES =====
     uint256 public constant PRECISION = 1e18;
 
-    FierceStaking public immutable fierceStaking;
+    RewardStaking public immutable fierceStaking;
     FierceToken public immutable fierceToken;
 
     // ===== STATE VARIABLES =====
@@ -66,7 +66,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         address _fierceStaking,
         address _fierceToken
     ) Ownable(msg.sender) {
-        fierceStaking = FierceStaking(_fierceStaking);
+        fierceStaking = RewardStaking(_fierceStaking);
         fierceToken = FierceToken(_fierceToken);
     }
 
