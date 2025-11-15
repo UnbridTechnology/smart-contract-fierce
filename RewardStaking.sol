@@ -415,7 +415,7 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
     /**
      * @dev Unstake all active stakes from BlockStake system
      */
-    function blockUnstakeAll() external whenNotPaused nonReentrant {
+    function blockUnstakeAll() external whenNotPaused nonReentrant onlyWhenClaimsEnabled {
         require(useBlockStakeSystem, "BlockStake system not active");
         require(blockStakes[msg.sender].length > 0, "No stakes found");
     
