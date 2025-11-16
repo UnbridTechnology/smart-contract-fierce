@@ -150,6 +150,8 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
             if (registeredStakers[staker] && !isBlacklisted[staker]) {
                 uint256 currentStake = getUserTotalStake(staker);
                 
+                // Solo actualizar snapshot si el usuario tiene stake actual
+                // Esto evita que usuarios sin stake sigan recibiendo comisiones
                 userStakeSnapshotByToken[_token][staker] = currentStake;
             }
         }
@@ -159,7 +161,11 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         for (uint i = 0; i < allStakers.length; i++) {
             address staker = allStakers[i];
             if (registeredStakers[staker] && !isBlacklisted[staker]) {
-                snapshotTotalStake += userStakeSnapshotByToken[_token][staker];
+                // Solo contar usuarios que tienen stake en el snapshot
+                uint256 stakerSnapshot = userStakeSnapshotByToken[_token][staker];
+                if (stakerSnapshot > 0) {
+                    snapshotTotalStake += stakerSnapshot;
+                }
             }
         }
     
