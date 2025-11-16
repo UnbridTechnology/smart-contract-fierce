@@ -399,7 +399,9 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
         totalStakedTokens -= stake.amount;
         userStakedAmount[msg.sender] -= stake.amount;
         userPendingRewards[msg.sender] = 0;
-        _registerStaker(msg.sender);
+        
+        // Unregister from commission distributor if no stake left
+        _unregisterStaker(msg.sender);
 
         uint256 totalAmount = stake.amount + totalRewards;
         token.transfer(msg.sender, totalAmount);
@@ -442,7 +444,9 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
         totalStakedTokens -= totalAmountToUnstake;
         userStakedAmount[msg.sender] -= totalAmountToUnstake;
         userPendingRewards[msg.sender] = 0;
-        _registerStaker(msg.sender);
+        
+        // Unregister from commission distributor if no stake left
+        _unregisterStaker(msg.sender);
     
         uint256 totalAmount = totalAmountToUnstake + totalRewards;
         token.transfer(msg.sender, totalAmount);
@@ -567,12 +571,26 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
 
     /**
      * @dev Register or update staker in commission distributor
+     * Only registers if user has active stake
      * @param staker Address of the staker to register
      */
     function _registerStaker(address staker) internal {
         emit StakerRegisteredOrUpdated(staker);
         if (address(commissionsDistributor) != address(0)) {
-            commissionsDistributor.registerStaker(staker);
+            // Solo registrar si el usuario tiene stake activo
+            if (userStakedAmount[staker] > 0) {
+                commissionsDistributor.registerStaker(staker);
+            }
+        }
+    }
+
+    /**
+     * @dev Unregister staker from commission distributor when they have no stake
+     * @param staker Address of the staker to unregister
+     */
+    function _unregisterStaker(address staker) internal {
+        if (address(commissionsDistributor) != address(0) && userStakedAmount[staker] == 0) {
+            commissionsDistributor.unregisterStaker(staker);
         }
     }
 

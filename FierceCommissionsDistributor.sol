@@ -88,7 +88,11 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * [cite_start]@dev Manually unregisters a staker, useful for management[cite: 22].
      * [cite_start]@param staker The address of the staker to unregister[cite: 23].
      */
-    function unregisterStaker(address staker) external onlyOwner {
+    function unregisterStaker(address staker) external {
+        require(
+            msg.sender == owner() || msg.sender == address(fierceStaking),
+            "Only owner or staking contract can unregister"
+        );
         require(registeredStakers[staker], "Staker is not registered");
         registeredStakers[staker] = false;
         for (uint i = 0; i < allStakers.length; i++) {
