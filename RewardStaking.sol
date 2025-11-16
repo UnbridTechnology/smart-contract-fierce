@@ -992,4 +992,5 @@ contract RewardStaking is Ownable, ReentrancyGuard, Pausable {
 // Interface for FierceCommissionDistributor contract
 interface IFierceCommissionDistributor {
     function registerStaker(address staker) external;
+    function unregisterStaker(address staker) external;
 }
