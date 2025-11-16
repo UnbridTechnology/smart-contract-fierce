@@ -25,10 +25,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     FierceToken public immutable fierceToken;
 
     // ===== STATE VARIABLES =====
-    // Ganancias acumuladas por token
+    
     mapping(address => uint256) public totalCommissionsByToken;
 
-    // Cantidad reclamada por usuario y token
+    
     mapping(address => mapping(address => uint256)) public totalClaimedByTokenAndUser;
 
     // Stake total elegible en el momento del depósito
@@ -38,11 +38,11 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     address[] public allStakers;
     mapping(address => bool) public registeredStakers;
     mapping(address => bool) public isBlacklisted;
-    // STATE VARIABLES - AGREGAR
+    // STATE VARIABLES
     mapping(address => uint256) public totalWeightSnapshotByToken;
     mapping(address => mapping(address => uint256)) public userStakeSnapshotByToken;
 
-    // Lógica para el período de emisión de FierceStaking
+    
     bool public emissionPeriodOver;
 
     // ===== EVENTS =====
@@ -144,18 +144,29 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
 
         uint256 totalEligibleStake = _calculateTotalEligibleStake();
 
-        // AGREGAR: Tomar snapshot de todos los stakers registrados
+        
         for (uint i = 0; i < allStakers.length; i++) {
             address staker = allStakers[i];
             if (registeredStakers[staker] && !isBlacklisted[staker]) {
-                userStakeSnapshotByToken[_token][staker] = getUserTotalStake(staker);
+                uint256 currentStake = getUserTotalStake(staker);
+                
+                userStakeSnapshotByToken[_token][staker] = currentStake;
             }
         }
     
-    // Agregar al total acumulado de comisiones y actualizar el stake total elegible
-    totalCommissionsByToken[_token] += _amount;
-    totalEligibleStakeByToken[_token] = totalEligibleStake;
-    totalWeightSnapshotByToken[_token] = totalEligibleStake; // ✅ Snapshot del peso total
+        
+        uint256 snapshotTotalStake = 0;
+        for (uint i = 0; i < allStakers.length; i++) {
+            address staker = allStakers[i];
+            if (registeredStakers[staker] && !isBlacklisted[staker]) {
+                snapshotTotalStake += userStakeSnapshotByToken[_token][staker];
+            }
+        }
+    
+        
+        totalCommissionsByToken[_token] += _amount;
+        totalEligibleStakeByToken[_token] = totalEligibleStake;
+        totalWeightSnapshotByToken[_token] = snapshotTotalStake;
 
     emit CommissionsDeposited(_token, _amount, totalEligibleStake);
 }
@@ -189,24 +200,24 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      */
     function getPendingRewards(address user, address token) public view returns (uint256) {
         uint256 totalEarnings = totalCommissionsByToken[token];
-        uint256 totalEligible = totalWeightSnapshotByToken[token]; // ✅ Usar snapshot
+        uint256 totalEligible = totalWeightSnapshotByToken[token]; 
 
         if (totalEarnings == 0 || totalEligible == 0) {
             return 0;
         }
 
-        // ✅ Usar snapshot del usuario en lugar del stake actual
+        
         uint256 userStake = userStakeSnapshotByToken[token][user];
 
         if (isBlacklisted[user] || userStake == 0) {
             return 0;
         }
 
-        // Calcula la parte de las ganancias que le corresponde al usuario
+        
         uint256 userShare = (userStake * PRECISION) / totalEligible;
         uint256 totalUserEarnings = (totalEarnings * userShare) / PRECISION;
 
-        // Restar lo que ya se ha reclamado
+       
         uint256 claimedAmount = totalClaimedByTokenAndUser[token][user];
         if (totalUserEarnings <= claimedAmount) {
             return 0;
