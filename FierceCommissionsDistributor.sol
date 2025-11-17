@@ -85,8 +85,8 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
             registeredStakers[staker] = true;
             allStakers.push(staker);
             
-            // Establecer deuda inicial para todos los tokens existentes
-            // Esto asegura que solo reciba comisiones futuras
+            // Set initial debt for all existing tokens
+            // This ensures they only receive future commissions
             _setInitialDebt(staker);
             
             emit StakerRegistered(staker);
@@ -98,8 +98,8 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @param staker Address of the new staker
      */
     function _setInitialDebt(address staker) internal {
-        // La deuda se establecerá dinámicamente cuando el usuario
-        // interactúe por primera vez con cada token
+        // Debt will be set dynamically when the user
+        // first interacts with each token
     }
     
     /**
@@ -180,13 +180,13 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 totalEligibleStake = _calculateTotalEligibleStake();
         require(totalEligibleStake > 0, "No eligible stakers");
         
-        // Acumular comisiones totales
+        // Accumulate total commissions
         totalCommissionsByToken[_token] += _amount;
         
-        // Actualizar el acumulador de recompensas por stake
+        // Update the reward per stake accumulator
         rewardPerStakeAccumulated[_token] += (_amount * PRECISION) / totalEligibleStake;
         
-        // Guardar snapshot del stake total actual
+        // Save snapshot of current total stake
         totalStakeSnapshot[_token] = totalEligibleStake;
 
         emit CommissionsDeposited(_token, _amount, totalEligibleStake);
@@ -197,7 +197,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @param _token The address of the token to claim from.
      */
     function claimRewards(address _token) external nonReentrant {
-        // Establecer deuda inicial si es la primera vez que interactúa con este token
+        // Set initial debt if this is the first time interacting with this token
         if (userRewardDebt[_token][msg.sender] == 0 && rewardPerStakeAccumulated[_token] > 0) {
             uint256 userStake = getUserTotalStake(msg.sender);
             if (userStake > 0) {
@@ -208,7 +208,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 pendingRewards = getPendingRewards(msg.sender, _token);
         require(pendingRewards > 0, "No pending rewards to claim");
         
-        // Actualizar lo que ha reclamado el usuario
+        // Update what the user has claimed
         totalClaimedByTokenAndUser[_token][msg.sender] += pendingRewards;
         
         IERC20 tokenContract = IERC20(_token);
@@ -231,18 +231,18 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 userStake = getUserTotalStake(user);
         if (userStake == 0) return 0;
         
-        // Calcular total de recompensas acumuladas para este usuario
+        // Calculate total accumulated rewards for this user
         uint256 totalUserRewards = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
         
-        // Restar la deuda inicial (punto de entrada)
+        // Subtract initial debt (entry point)
         uint256 userDebt = userRewardDebt[token][user];
         if (userDebt == 0 && rewardPerStakeAccumulated[token] > 0) {
-            // Si no tiene deuda establecida pero hay recompensas acumuladas,
-            // establecer deuda inicial para excluir recompensas pasadas
+            // If no debt is established but there are accumulated rewards,
+            // set initial debt to exclude past rewards
             userDebt = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
         }
         
-        // Restar lo que ya ha reclamado
+        // Subtract what has already been claimed
         uint256 alreadyClaimed = totalClaimedByTokenAndUser[token][user];
         
         if (totalUserRewards <= (userDebt + alreadyClaimed)) {
@@ -276,7 +276,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      */
     function getUserTotalStake(address user) public view returns (uint256) {
         if (isBlacklisted[user]) return 0;
-        // Solo contar tokens realmente stakeados, no el balance disponible
+        // Only count actually staked tokens, not available balance
         uint256 legacyStake = emissionPeriodOver ? 0 : fierceStaking.userStakedAmount(user);
         
         return legacyStake;
