@@ -26,26 +26,17 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
 
     // ===== STATE VARIABLES =====
     
-    // Acumulativo simple: total de comisiones por token
-    mapping(address => uint256) public totalCommissionsByToken;
-    
-    // Cuánto ha reclamado cada usuario por token
-    mapping(address => mapping(address => uint256)) public totalClaimedByTokenAndUser;
-    
     // Gestión de Stakers
     address[] public allStakers;
     mapping(address => bool) public registeredStakers;
     mapping(address => bool) public isBlacklisted;
     
-    // Snapshot del stake total cuando se hizo el último depósito
-    mapping(address => uint256) public totalStakeSnapshot;
-    
-    // Acumulador de recompensas por token por unidad de stake
-    mapping(address => uint256) public rewardPerStakeAccumulated;
-    
-    // Deuda de recompensas por usuario (punto de entrada)
-    mapping(address => mapping(address => uint256)) public userRewardDebt;
-
+    // Snapshot system per deposit
+    mapping(address => uint256) public depositCounter; // Counter of deposits per token
+    mapping(address => mapping(uint256 => uint256)) public depositAmounts; // token => depositId => amount
+    mapping(address => mapping(uint256 => uint256)) public totalStakeAtDeposit; // token => depositId => totalStake
+    mapping(address => mapping(uint256 => mapping(address => uint256))) public userStakeAtDeposit; // token => depositId => user => stake
+    mapping(address => mapping(address => uint256)) public totalClaimedByTokenAndUser;
     
     bool public emissionPeriodOver;
 
@@ -98,21 +89,8 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @param staker Address of the new staker
      */
     function _setInitialDebt(address staker) internal {
-        // Debt will be set dynamically when the user
-        // first interacts with each token
-    }
-    
-    /**
-     * @dev Sets initial debt for a user for a specific token (owner only)
-     * @param user Address of the user
-     * @param token Address of the token
-     */
-    function setUserDebtForToken(address user, address token) external onlyOwner {
-        require(registeredStakers[user], "User not registered");
-        uint256 userStake = getUserTotalStake(user);
-        if (userStake > 0 && rewardPerStakeAccumulated[token] > 0) {
-            userRewardDebt[token][user] = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
-        }
+        // New stakers will only participate in future deposits
+        // No need to set debt as they won't have snapshots in past deposits
     }
 
     /**
@@ -180,14 +158,21 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         uint256 totalEligibleStake = _calculateTotalEligibleStake();
         require(totalEligibleStake > 0, "No eligible stakers");
         
-        // Accumulate total commissions
-        totalCommissionsByToken[_token] += _amount;
+        uint256 currentDepositId = depositCounter[_token];
         
-        // Update the reward per stake accumulator
-        rewardPerStakeAccumulated[_token] += (_amount * PRECISION) / totalEligibleStake;
+        // Store deposit info
+        depositAmounts[_token][currentDepositId] = _amount;
+        totalStakeAtDeposit[_token][currentDepositId] = totalEligibleStake;
         
-        // Save snapshot of current total stake
-        totalStakeSnapshot[_token] = totalEligibleStake;
+        // Take snapshot of all registered stakers at this moment
+        for (uint256 i = 0; i < allStakers.length; i++) {
+            address staker = allStakers[i];
+            if (registeredStakers[staker] && !isBlacklisted[staker]) {
+                userStakeAtDeposit[_token][currentDepositId][staker] = getUserTotalStake(staker);
+            }
+        }
+        
+        depositCounter[_token]++;
 
         emit CommissionsDeposited(_token, _amount, totalEligibleStake);
     }
@@ -220,23 +205,28 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
     function getPendingRewards(address user, address token) public view returns (uint256) {
         if (isBlacklisted[user] || !registeredStakers[user]) return 0;
         
-        uint256 userStake = getUserTotalStake(user);
-        if (userStake == 0) return 0;
+        uint256 totalRewards = 0;
+        uint256 totalDeposits = depositCounter[token];
         
-        // Calculate total accumulated rewards for this user
-        uint256 totalUserRewards = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
-        
-        // Subtract initial debt (entry point) - only if explicitly set
-        uint256 userDebt = userRewardDebt[token][user];
+        // Calculate rewards from all deposits where user had stake
+        for (uint256 i = 0; i < totalDeposits; i++) {
+            uint256 userStakeAtTime = userStakeAtDeposit[token][i][user];
+            if (userStakeAtTime > 0) {
+                uint256 totalStakeAtTime = totalStakeAtDeposit[token][i];
+                uint256 depositAmount = depositAmounts[token][i];
+                uint256 userShare = (userStakeAtTime * depositAmount) / totalStakeAtTime;
+                totalRewards += userShare;
+            }
+        }
         
         // Subtract what has already been claimed
         uint256 alreadyClaimed = totalClaimedByTokenAndUser[token][user];
         
-        if (totalUserRewards <= (userDebt + alreadyClaimed)) {
+        if (totalRewards <= alreadyClaimed) {
             return 0;
         }
         
-        return totalUserRewards - userDebt - alreadyClaimed;
+        return totalRewards - alreadyClaimed;
     }
 
     /**
