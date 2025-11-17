@@ -26,21 +26,25 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
 
     // ===== STATE VARIABLES =====
     
+    // Acumulativo simple: total de comisiones por token
     mapping(address => uint256) public totalCommissionsByToken;
-
     
+    // Cuánto ha reclamado cada usuario por token
     mapping(address => mapping(address => uint256)) public totalClaimedByTokenAndUser;
-
-    // Stake total elegible en el momento del depósito
-    mapping(address => uint256) public totalEligibleStakeByToken;
-
+    
     // Gestión de Stakers
     address[] public allStakers;
     mapping(address => bool) public registeredStakers;
     mapping(address => bool) public isBlacklisted;
-    // STATE VARIABLES
-    mapping(address => uint256) public totalWeightSnapshotByToken;
-    mapping(address => mapping(address => uint256)) public userStakeSnapshotByToken;
+    
+    // Snapshot del stake total cuando se hizo el último depósito
+    mapping(address => uint256) public totalStakeSnapshot;
+    
+    // Acumulador de recompensas por token por unidad de stake
+    mapping(address => uint256) public rewardPerStakeAccumulated;
+    
+    // Deuda de recompensas por usuario (punto de entrada)
+    mapping(address => mapping(address => uint256)) public userRewardDebt;
 
     
     bool public emissionPeriodOver;
@@ -80,7 +84,34 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         if (!registeredStakers[staker]) {
             registeredStakers[staker] = true;
             allStakers.push(staker);
+            
+            // Establecer deuda inicial para todos los tokens existentes
+            // Esto asegura que solo reciba comisiones futuras
+            _setInitialDebt(staker);
+            
             emit StakerRegistered(staker);
+        }
+    }
+    
+    /**
+     * @dev Sets initial debt for a new staker to exclude past rewards
+     * @param staker Address of the new staker
+     */
+    function _setInitialDebt(address staker) internal {
+        // La deuda se establecerá dinámicamente cuando el usuario
+        // interactúe por primera vez con cada token
+    }
+    
+    /**
+     * @dev Sets initial debt for a user for a specific token (owner only)
+     * @param user Address of the user
+     * @param token Address of the token
+     */
+    function setUserDebtForToken(address user, address token) external onlyOwner {
+        require(registeredStakers[user], "User not registered");
+        uint256 userStake = getUserTotalStake(user);
+        if (userStake > 0 && rewardPerStakeAccumulated[token] > 0) {
+            userRewardDebt[token][user] = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
         }
     }
 
@@ -147,50 +178,39 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         tokenContract.safeTransferFrom(msg.sender, address(this), _amount);
 
         uint256 totalEligibleStake = _calculateTotalEligibleStake();
-
+        require(totalEligibleStake > 0, "No eligible stakers");
         
-        for (uint i = 0; i < allStakers.length; i++) {
-            address staker = allStakers[i];
-            if (registeredStakers[staker] && !isBlacklisted[staker]) {
-                uint256 currentStake = getUserTotalStake(staker);
-                
-                userStakeSnapshotByToken[_token][staker] = currentStake;
-            }
-        }
-    
-        
-        uint256 snapshotTotalStake = 0;
-        for (uint i = 0; i < allStakers.length; i++) {
-            address staker = allStakers[i];
-            if (registeredStakers[staker] && !isBlacklisted[staker]) {
-                uint256 stakerSnapshot = userStakeSnapshotByToken[_token][staker];
-                if (stakerSnapshot > 0) {
-                    snapshotTotalStake += stakerSnapshot;
-                }
-            }
-        }
-    
-        
+        // Acumular comisiones totales
         totalCommissionsByToken[_token] += _amount;
-        totalEligibleStakeByToken[_token] = totalEligibleStake;
-        totalWeightSnapshotByToken[_token] = snapshotTotalStake;
+        
+        // Actualizar el acumulador de recompensas por stake
+        rewardPerStakeAccumulated[_token] += (_amount * PRECISION) / totalEligibleStake;
+        
+        // Guardar snapshot del stake total actual
+        totalStakeSnapshot[_token] = totalEligibleStake;
 
-    emit CommissionsDeposited(_token, _amount, totalEligibleStake);
-}
+        emit CommissionsDeposited(_token, _amount, totalEligibleStake);
+    }
 
     /**
      * @dev Claims pending rewards for a user for a specific token.
      * @param _token The address of the token to claim from.
      */
     function claimRewards(address _token) external nonReentrant {
+        // Establecer deuda inicial si es la primera vez que interactúa con este token
+        if (userRewardDebt[_token][msg.sender] == 0 && rewardPerStakeAccumulated[_token] > 0) {
+            uint256 userStake = getUserTotalStake(msg.sender);
+            if (userStake > 0) {
+                userRewardDebt[_token][msg.sender] = (userStake * rewardPerStakeAccumulated[_token]) / PRECISION;
+            }
+        }
+        
         uint256 pendingRewards = getPendingRewards(msg.sender, _token);
         require(pendingRewards > 0, "No pending rewards to claim");
-        require(userStakeSnapshotByToken[_token][msg.sender] > 0, "No eligible stake at deposit time");
-    
-        userStakeSnapshotByToken[_token][msg.sender] = 0;
         
+        // Actualizar lo que ha reclamado el usuario
         totalClaimedByTokenAndUser[_token][msg.sender] += pendingRewards;
-    
+        
         IERC20 tokenContract = IERC20(_token);
         tokenContract.safeTransfer(msg.sender, pendingRewards);
     
@@ -206,49 +226,47 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @return The amount of pending rewards.
      */
     function getPendingRewards(address user, address token) public view returns (uint256) {
-        uint256 totalEarnings = totalCommissionsByToken[token];
-        uint256 totalEligible = totalWeightSnapshotByToken[token]; 
-
-        if (totalEarnings == 0 || totalEligible == 0) {
-            return 0;
-        }
-
+        if (isBlacklisted[user] || !registeredStakers[user]) return 0;
         
-        uint256 userStake = userStakeSnapshotByToken[token][user];
-
-        if (isBlacklisted[user] || userStake == 0) {
-            return 0;
-        }
-
+        uint256 userStake = getUserTotalStake(user);
+        if (userStake == 0) return 0;
         
-        uint256 userShare = (userStake * PRECISION) / totalEligible;
-        uint256 totalUserEarnings = (totalEarnings * userShare) / PRECISION;
-
-       
-        uint256 claimedAmount = totalClaimedByTokenAndUser[token][user];
-        if (totalUserEarnings <= claimedAmount) {
+        // Calcular total de recompensas acumuladas para este usuario
+        uint256 totalUserRewards = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
+        
+        // Restar la deuda inicial (punto de entrada)
+        uint256 userDebt = userRewardDebt[token][user];
+        if (userDebt == 0 && rewardPerStakeAccumulated[token] > 0) {
+            // Si no tiene deuda establecida pero hay recompensas acumuladas,
+            // establecer deuda inicial para excluir recompensas pasadas
+            userDebt = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
+        }
+        
+        // Restar lo que ya ha reclamado
+        uint256 alreadyClaimed = totalClaimedByTokenAndUser[token][user];
+        
+        if (totalUserRewards <= (userDebt + alreadyClaimed)) {
             return 0;
         }
-
-        return totalUserEarnings - claimedAmount;
+        
+        return totalUserRewards - userDebt - alreadyClaimed;
     }
 
     /**
-     * [cite_start]@dev Calculates the total eligible stake, excluding blacklisted stakers[cite: 62].
-     * [cite_start]@return The total amount of eligible stake[cite: 62].
+     * @dev Calculates the total eligible stake, excluding blacklisted stakers
+     * @return The total amount of eligible stake
      */
     function _calculateTotalEligibleStake() internal view returns (uint256) {
-        uint256 totalStake = getTotalStakedInEcosystem();
-        uint256 blacklistedStake = 0;
+        uint256 totalEligibleStake = 0;
         
         for (uint256 i = 0; i < allStakers.length; i++) {
             address wallet = allStakers[i];
-            if (isBlacklisted[wallet] && registeredStakers[wallet]) {
-                blacklistedStake += getUserTotalStake(wallet);
+            if (registeredStakers[wallet] && !isBlacklisted[wallet]) {
+                totalEligibleStake += getUserTotalStake(wallet);
             }
         }
         
-        return totalStake - blacklistedStake;
+        return totalEligibleStake;
     }
 
     /**
@@ -264,16 +282,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         return legacyStake;
     }
 
-    /**
-     * [cite_start]@dev Gets the total stake across the entire ecosystem[cite: 72].
-     * [cite_start]@return The total stake in both contracts[cite: 72].
-     */
-    function getTotalStakedInEcosystem() public view returns (uint256) {
-        // Solo contar tokens realmente stakeados
-        uint256 legacyTotal = emissionPeriodOver ? 0 : fierceStaking.getTotalStaked();
-        
-        return legacyTotal;
-    }
+
 
     /**
      * [cite_start]@dev Calculates a user's share[cite: 75].
