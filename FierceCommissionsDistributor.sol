@@ -258,10 +258,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      */
     function getUserTotalStake(address user) public view returns (uint256) {
         if (isBlacklisted[user]) return 0;
+        // Solo contar tokens realmente stakeados, no el balance disponible
         uint256 legacyStake = emissionPeriodOver ? 0 : fierceStaking.userStakedAmount(user);
-        uint256 newStake = fierceToken.balanceOf(user);
         
-        return legacyStake + newStake;
+        return legacyStake;
     }
 
     /**
@@ -269,10 +269,10 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * [cite_start]@return The total stake in both contracts[cite: 72].
      */
     function getTotalStakedInEcosystem() public view returns (uint256) {
+        // Solo contar tokens realmente stakeados
         uint256 legacyTotal = emissionPeriodOver ? 0 : fierceStaking.getTotalStaked();
-        uint256 newContractTotal = fierceToken.balanceOf(address(this));
         
-        return legacyTotal + newContractTotal;
+        return legacyTotal;
     }
 
     /**
