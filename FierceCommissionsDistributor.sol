@@ -197,14 +197,6 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @param _token The address of the token to claim from.
      */
     function claimRewards(address _token) external nonReentrant {
-        // Set initial debt if this is the first time interacting with this token
-        if (userRewardDebt[_token][msg.sender] == 0 && rewardPerStakeAccumulated[_token] > 0) {
-            uint256 userStake = getUserTotalStake(msg.sender);
-            if (userStake > 0) {
-                userRewardDebt[_token][msg.sender] = (userStake * rewardPerStakeAccumulated[_token]) / PRECISION;
-            }
-        }
-        
         uint256 pendingRewards = getPendingRewards(msg.sender, _token);
         require(pendingRewards > 0, "No pending rewards to claim");
         
@@ -234,13 +226,8 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
         // Calculate total accumulated rewards for this user
         uint256 totalUserRewards = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
         
-        // Subtract initial debt (entry point)
+        // Subtract initial debt (entry point) - only if explicitly set
         uint256 userDebt = userRewardDebt[token][user];
-        if (userDebt == 0 && rewardPerStakeAccumulated[token] > 0) {
-            // If no debt is established but there are accumulated rewards,
-            // set initial debt to exclude past rewards
-            userDebt = (userStake * rewardPerStakeAccumulated[token]) / PRECISION;
-        }
         
         // Subtract what has already been claimed
         uint256 alreadyClaimed = totalClaimedByTokenAndUser[token][user];
