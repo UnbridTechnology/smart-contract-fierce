@@ -203,7 +203,7 @@ contract FierceCommissionDistributor is Ownable, ReentrancyGuard {
      * @return The amount of pending rewards.
      */
     function getPendingRewards(address user, address token) public view returns (uint256) {
-        if (isBlacklisted[user] || !registeredStakers[user]) return 0;
+        if (isBlacklisted[user]) return 0;
         
         uint256 totalRewards = 0;
         uint256 totalDeposits = depositCounter[token];
